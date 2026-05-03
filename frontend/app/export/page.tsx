@@ -21,19 +21,10 @@ export default function ExportPage() {
   useEffect(() => {
     const fetchSearches = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/prospects`)
+        const res = await fetch(`${API_URL}/api/searches`)
         if (res.ok) {
-          const prospects = await res.json()
-          const searchIds: string[] = Array.from(new Set(prospects.map((p: { search_id: string }) => p.search_id)))
-
-          const searchDetails = await Promise.all(
-            searchIds.map(async (id) => {
-              const res = await fetch(`${API_URL}/api/searches/${id}`)
-              if (res.ok) return await res.json()
-              return null
-            })
-          )
-          setSearches(searchDetails.filter(Boolean))
+          const allSearches = await res.json()
+          setSearches(allSearches.filter((s: SearchRun) => s.status === 'complete'))
         }
       } catch {
         console.error('Failed to fetch searches')

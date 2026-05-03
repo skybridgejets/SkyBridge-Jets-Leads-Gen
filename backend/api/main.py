@@ -97,6 +97,30 @@ async def create_search(body: SearchCreate, db: AsyncSession = Depends(get_db)):
     }
 
 
+@app.get("/api/searches")
+async def list_searches(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Search).order_by(Search.created_at.desc()))
+    searches = result.scalars().all()
+    response = []
+    for s in searches:
+        prospect_count_result = await db.execute(
+            select(func.count(Prospect.id)).where(Prospect.search_id == s.id)
+        )
+        actual = prospect_count_result.scalar() or 0
+        response.append({
+            "id": str(s.id),
+            "query": s.query,
+            "location": s.location,
+            "persona": s.persona,
+            "industry": s.industry,
+            "prospect_count": s.prospect_count,
+            "actual_prospects": actual,
+            "status": s.status,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        })
+    return response
+
+
 @app.get("/api/searches/{search_id}")
 async def get_search(search_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Search).where(Search.id == search_id))
