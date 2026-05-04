@@ -119,7 +119,19 @@ async def run_pipeline(search_id: uuid.UUID, db: AsyncSession):
         await db.commit()
 
     # Persist results to database
-    await _persist_results(db, search_id, pipeline_data or [])
+    try:
+        await _persist_results(db, search_id, pipeline_data or [])
+        await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to persist results for search {search_id}: {e}")
+        await db.rollback()
+        # Retry with individual inserts to save what we can
+        try:
+            await _persist_results_safe(db, search_id, pipeline_data or [])
+            await db.commit()
+        except Exception as e2:
+            logger.error(f"Safe persist also failed for search {search_id}: {e2}")
+            await db.rollback()
 
     await db.execute(
         update(Search).where(Search.id == search_id).values(status="complete")
@@ -212,3 +224,84 @@ async def _persist_results(
             db.add(comp_flag)
 
     await db.flush()
+
+
+async def _persist_results_safe(
+    db: AsyncSession,
+    search_id: uuid.UUID,
+    prospects: list[dict],
+):
+    saved = 0
+    for p_data in prospects:
+        try:
+            company_id = None
+            if p_data.get("company"):
+                company = Company(
+                    name=p_data.get("company", ""),
+                    website=p_data.get("company_website", ""),
+                    location=p_data.get("location", ""),
+                    source_url=p_data.get("source_url", ""),
+                    source_type=p_data.get("source_type", ""),
+                )
+                db.add(company)
+                await db.flush()
+                company_id = company.id
+
+            prospect = Prospect(
+                search_id=search_id,
+                company_id=company_id,
+                full_name=p_data.get("full_name", ""),
+                job_title=p_data.get("job_title", ""),
+                company=p_data.get("company", ""),
+                company_website=p_data.get("company_website", ""),
+                location=p_data.get("location", ""),
+                linkedin_url=p_data.get("linkedin_url", ""),
+                email=p_data.get("email", ""),
+                email_verified=p_data.get("email_verified", False),
+                source_url=p_data.get("source_url", ""),
+                source_type=p_data.get("source_type", ""),
+                raw_data=p_data.get("raw_data"),
+            )
+            db.add(prospect)
+            await db.flush()
+
+            if "lead_score" in p_data:
+                lead_score = LeadScore(
+                    prospect_id=prospect.id,
+                    total_score=p_data["lead_score"],
+                    score_breakdown=p_data.get("score_breakdown", {}),
+                )
+                db.add(lead_score)
+
+            outreach = p_data.get("outreach", {})
+            if outreach:
+                outreach_msg = OutreachMessage(
+                    prospect_id=prospect.id,
+                    linkedin_connection=outreach.get("linkedin_connection", ""),
+                    linkedin_followup=outreach.get("linkedin_followup", ""),
+                    email_subject=outreach.get("email_subject", ""),
+                    email_body=outreach.get("email_body", ""),
+                    whatsapp_message=outreach.get("whatsapp_message", ""),
+                    personalisation_note=outreach.get("personalisation_note", ""),
+                )
+                db.add(outreach_msg)
+
+            compliance = p_data.get("compliance", {})
+            if compliance:
+                comp_flag = ComplianceFlag(
+                    prospect_id=prospect.id,
+                    data_source=compliance.get("data_source", ""),
+                    confidence_level=compliance.get("confidence_level", "low")[:10],
+                    email_verified=compliance.get("email_verified", False),
+                    source_type=compliance.get("source_type", "public")[:10],
+                    flags=compliance.get("flags", []),
+                )
+                db.add(comp_flag)
+
+            await db.flush()
+            saved += 1
+        except Exception as e:
+            logger.error(f"Failed to save prospect {p_data.get('full_name', '?')}: {e}")
+            await db.rollback()
+
+    logger.info(f"Safe persist saved {saved}/{len(prospects)} prospects")
