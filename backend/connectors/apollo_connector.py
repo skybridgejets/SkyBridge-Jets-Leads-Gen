@@ -17,7 +17,7 @@ class ApolloConnector(BaseConnector):
     def __init__(self):
         self.api_key = os.getenv("APOLLO_API_KEY")
         if not self.api_key:
-            logger.warning("APOLLO_API_KEY not set — Apollo connector will return mock/empty results")
+            logger.warning("APOLLO_API_KEY not set — Apollo connector will return empty results")
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -32,6 +32,51 @@ class ApolloConnector(BaseConnector):
     async def enrich(self, **kwargs) -> dict[str, Any] | None:
         return await self.enrich_person(**kwargs)
 
+    async def search_organizations(
+        self,
+        location: str = "",
+        keywords: list[str] | None = None,
+        limit: int = 25,
+        **kwargs,
+    ) -> list[dict[str, Any]]:
+        if not self.api_key:
+            return []
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                payload: dict[str, Any] = {
+                    "per_page": min(limit, 100),
+                    "page": 1,
+                }
+                if location:
+                    payload["organization_locations"] = [location]
+                if keywords:
+                    payload["q_organization_keyword_tags"] = keywords
+
+                resp = await client.post(
+                    f"{APOLLO_BASE_URL}/organizations/search",
+                    headers=self._headers(),
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                orgs = data.get("organizations", [])
+                return [
+                    {
+                        "company_name": o.get("name", ""),
+                        "website": o.get("website_url", ""),
+                        "source_url": o.get("website_url", ""),
+                        "industry": o.get("industry", ""),
+                        "location": f"{o.get('city', '')}, {o.get('country', '')}".strip(", "),
+                        "relevance_reason": f"Apollo org: {o.get('industry', '')}",
+                        "source": "apollo",
+                    }
+                    for o in orgs
+                ]
+        except Exception as e:
+            logger.error(f"Apollo search_organizations failed: {e}")
+            return []
+
     async def search_people(
         self,
         title: str = "",
@@ -41,8 +86,7 @@ class ApolloConnector(BaseConnector):
         **kwargs,
     ) -> list[dict[str, Any]]:
         if not self.api_key:
-            logger.info("Apollo: returning mock results (no API key)")
-            return self._mock_search(title, location, limit)
+            return []
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
@@ -80,6 +124,12 @@ class ApolloConnector(BaseConnector):
                     }
                     for p in people
                 ]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403 or "not accessible" in str(e.response.text):
+                logger.warning("Apollo people search not available on current plan — skipping")
+            else:
+                logger.error(f"Apollo search_people failed: {e}")
+            return []
         except Exception as e:
             logger.error(f"Apollo search_people failed: {e}")
             return []
@@ -92,7 +142,7 @@ class ApolloConnector(BaseConnector):
         **kwargs,
     ) -> dict[str, Any] | None:
         if not self.api_key:
-            return self._mock_enrich(name, company)
+            return None
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
@@ -126,13 +176,19 @@ class ApolloConnector(BaseConnector):
                     "location": f"{person.get('city', '')}, {person.get('country', '')}".strip(", "),
                     "source": "apollo",
                 }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403 or "not accessible" in str(e.response.text):
+                logger.warning("Apollo people match not available on current plan — skipping")
+            else:
+                logger.error(f"Apollo enrich_person failed: {e}")
+            return None
         except Exception as e:
             logger.error(f"Apollo enrich_person failed: {e}")
             return None
 
     async def enrich_company(self, domain: str = "", **kwargs) -> dict[str, Any] | None:
         if not self.api_key:
-            return {"name": domain, "website": domain, "source": "apollo_mock"}
+            return None
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
@@ -156,9 +212,3 @@ class ApolloConnector(BaseConnector):
         except Exception as e:
             logger.error(f"Apollo enrich_company failed: {e}")
             return None
-
-    def _mock_search(self, title: str, location: str, limit: int) -> list[dict[str, Any]]:
-        return []
-
-    def _mock_enrich(self, name: str, company: str) -> dict[str, Any] | None:
-        return None

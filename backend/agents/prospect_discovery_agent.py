@@ -41,24 +41,42 @@ class ProspectDiscoveryAgent(BaseAgent):
                 "source": "apollo",
             })
 
-        for company_info in input_data[:20]:
-            company_name = company_info.get("company_name", "")
-            if not company_name:
-                continue
+        if web_search.is_enabled():
+            for company_info in input_data[:20]:
+                company_name = company_info.get("company_name", "")
+                if not company_name:
+                    continue
 
-            search_results = await web_search.search(
-                query=f'"{company_name}" team leadership chief staff PA estate manager',
-                num_results=3,
-            )
-            for result in search_results:
+                search_results = await web_search.search(
+                    query=f'"{company_name}" team leadership chief staff PA estate manager',
+                    num_results=3,
+                )
+                for result in search_results:
+                    prospects.append({
+                        "name": "",
+                        "title": "",
+                        "company": company_name,
+                        "company_website": company_info.get("website", ""),
+                        "source_url": result.get("url", ""),
+                        "source": "web_search",
+                        "raw_snippet": result.get("snippet", ""),
+                    })
+
+        # If no people from Apollo and no web search, create prospect stubs from companies
+        if not prospects and input_data:
+            for company_info in input_data[:20]:
+                company_name = company_info.get("company_name", "")
+                if not company_name:
+                    continue
                 prospects.append({
                     "name": "",
                     "title": "",
                     "company": company_name,
                     "company_website": company_info.get("website", ""),
-                    "source_url": result.get("url", ""),
-                    "source": "web_search",
-                    "raw_snippet": result.get("snippet", ""),
+                    "source_url": company_info.get("source_url", ""),
+                    "source": company_info.get("source", "apollo"),
+                    "location": company_info.get("location", ""),
+                    "industry": company_info.get("industry", ""),
                 })
 
         logger.info(f"ProspectDiscoveryAgent found {len(prospects)} raw prospects")

@@ -13,17 +13,27 @@ class WebSearchConnector(BaseConnector):
     name = "web_search"
 
     def __init__(self):
+        self.disabled = os.getenv("DISABLE_WEB_SEARCH", "").lower() in ("true", "1", "yes")
         self.google_api_key = os.getenv("GOOGLE_CSE_API_KEY")
         self.google_cse_id = os.getenv("GOOGLE_CSE_ID")
         self.serpapi_key = os.getenv("SERPAPI_KEY")
 
-        if not self.google_api_key and not self.serpapi_key:
+        if self.disabled:
+            logger.info("Web search connector is disabled via DISABLE_WEB_SEARCH")
+        elif not self.google_api_key and not self.serpapi_key:
             logger.warning(
                 "No search API keys set (GOOGLE_CSE_API_KEY/GOOGLE_CSE_ID or SERPAPI_KEY) "
                 "— web search connector will return empty results"
             )
 
+    def is_enabled(self) -> bool:
+        if self.disabled:
+            return False
+        return bool(self.google_api_key or self.serpapi_key)
+
     async def search(self, query: str = "", num_results: int = 10, **kwargs) -> list[dict[str, Any]]:
+        if self.disabled:
+            return []
         if self.google_api_key and self.google_cse_id:
             return await self._google_search(query, num_results)
         if self.serpapi_key:
